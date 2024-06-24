@@ -216,9 +216,23 @@ void computeTTCLidar(std::vector<LidarPoint> &lidarPointsPrev,
 }
 
 
+double HelperCalculateIQR(std::vector<double> &distances)
+{
+    std::sort(distances.begin(), distances.end());
+    size_t q1Idx = distances.size() / 4;
+    size_t q3Idx = (3 * distances.size()) / 4;
+    double q1 = distances[q1Idx];
+    double q3 = distances[q3Idx];   
+    double iqr = q3 - q1;
+    return q3 + 1.5*iqr;
+}
+
+
 void matchBoundingBoxes(std::vector<cv::DMatch> &matches, std::map<int, int> &bbBestMatches, DataFrame &prevFrame, DataFrame &currFrame) {
     // Map to store the match counts between bounding boxes
     map<pair<int, int>, int> bbMatchCounts;
+    map<std::pair<int, int>, std::vector<cv::DMatch>> bbMatches;
+
 
     // Iterate over all matches
     for (const auto &match : matches) {
@@ -246,9 +260,29 @@ void matchBoundingBoxes(std::vector<cv::DMatch> &matches, std::map<int, int> &bb
 
         // If both keypoints are inside bounding boxes, count this match
         if (prevBoxID != -1 && currBoxID != -1) {
-            bbMatchCounts[make_pair(prevBoxID, currBoxID)]++;
+            bbMatches[make_pair(prevBoxID, currBoxID)].push_back(match);
         }
     }
+
+    //Filter current matches based on Euclidean distance
+    for (auto &bbMatch : bbMatches) {
+        std::vector<double> distances;
+        for (const auto &match : bbMatch.second){
+            cv::KeyPoint prevKpt = prevFrame.keypoints[match.queryIdx];
+            cv::KeyPoint currKpt = currFrame.keypoints[match.trainIdx];
+            double dist = cv::norm(prevKpt.pt - currKpt.pt);
+            distances.push_back(dist);
+        }
+        double threshold = HelperCalculateIQR(distances);
+        std::vector<cv::DMatch> filteredMatches;
+        for (size_t i = 0; i < distances.size(); i++){
+            if (distances[i] <= threshold){
+                filteredMatches.push_back(bbMatch.second[i]);
+                }
+            }
+            bbMatch.second = filteredMatches;
+            bbMatchCounts[bbMatch.first] = bbMatch.second.size();
+        }
 
     // Find the best matches for each bounding box in the previous frame
     for (const auto &prevBox : prevFrame.boundingBoxes) {
